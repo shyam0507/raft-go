@@ -1,15 +1,10 @@
 package internal
 
-import "sync"
-
-const ()
-
-var Handlers = map[string]func([]Value) Value{
-	"PING": ping,
-	"SET":  set,
-	"GET":  get,
-	"HSET": hset,
-	"HGET": hget,
+var Handlers = map[string]func([]Value, *map[string]string) Value{
+	"SET": set,
+	"GET": get,
+	// "HSET": hset,
+	// "HGET": hget,
 	// "HGETALL": hgetall,
 }
 
@@ -21,34 +16,25 @@ func ping(args []Value) Value {
 	return Value{Typ: "string", Str: args[0].Bulk}
 }
 
-var stringMap = map[string]string{}
-var setMutex = sync.RWMutex{}
-
-func set(args []Value) Value {
+func set(args []Value, m *map[string]string) Value {
 	if len(args) != 2 {
 		return Value{Typ: "error", Str: "ERR wrong number of arguments for 'set' command"}
 	}
 
-	key := args[0].Bulk
-	value := args[1].Bulk
-
-	setMutex.Lock()
-	stringMap[key] = value
-	setMutex.Unlock()
+	// key := args[0].Bulk
+	// value := args[1].Bulk
 
 	return Value{Typ: "string", Str: "OK"}
 }
 
-func get(args []Value) Value {
+func get(args []Value, m *map[string]string) Value {
 	if len(args) != 1 {
 		return Value{Typ: "error", Str: "ERR wrong number of arguments for 'set' command"}
 	}
 
 	key := args[0].Bulk
-
-	setMutex.RLock()
-	val, ok := stringMap[key]
-	setMutex.RUnlock()
+	m1 := *m
+	val, ok := m1[key]
 
 	if !ok {
 		return Value{Typ: "null"}
@@ -58,6 +44,7 @@ func get(args []Value) Value {
 
 }
 
+/*
 var mapMap = map[string]map[string]string{}
 var hSetMutex = sync.RWMutex{}
 
@@ -98,6 +85,7 @@ func hget(args []Value) Value {
 
 	return Value{Typ: "bulk", Bulk: value}
 }
+*/
 
 // func hgetall(args []string) string {
 // 	if len(args) == 0 {

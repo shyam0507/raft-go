@@ -36,7 +36,7 @@ type Server struct {
 	nextIndex  []int
 	matchIndex []int
 
-	stateMachine map[any]any
+	stateMachine map[string]string
 
 	tcpPort  string
 	httpPort string
@@ -96,7 +96,7 @@ func NewServer(tPort string, hPort string, serverId string, peers []Peer) (*Serv
 		log:          log,
 		commitIndex:  0,
 		lastApplied:  0,
-		stateMachine: map[any]any{},
+		stateMachine: map[string]string{},
 		tcpPort:      tPort,
 		httpPort:     hPort,
 		serverId:     serverId,
@@ -229,7 +229,7 @@ func (s *Server) handleTCPData(conn net.Conn) {
 			s.commitIndex++
 		}
 
-		result := handler(input.Array[1:])
+		result := handler(input.Array[1:], &s.stateMachine)
 		conn.Write(result.Marshal())
 	}
 }
