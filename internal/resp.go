@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 )
 
@@ -40,13 +41,13 @@ func (r *Resp) ProcessCMD() (Value, error) {
 
 	switch op {
 	case ARRAY:
-		fmt.Println("Array Input")
+		// slog.Info("Array Input")
 		return r.readArray()
 	case BULK:
-		fmt.Println("Bulk String Input")
+		// slog.Info("Bulk String Input")
 		return r.readBulk()
 	default:
-		fmt.Println("None")
+		slog.Info("None")
 		return Value{}, fmt.Errorf("invalid command")
 	}
 }

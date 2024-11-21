@@ -49,6 +49,8 @@ type Server struct {
 	//
 	prevLogIndex int
 	prevLogTerm  int
+
+	lastHeartBeat int64
 }
 
 type Log struct {
@@ -104,6 +106,7 @@ func NewServer(tPort string, hPort string, serverId string, peers []Peer) (*Serv
 		peers:        peers,
 		prevLogIndex: 0,
 		prevLogTerm:  0,
+		state:        Follower,
 	}
 
 	return s, nil
@@ -122,42 +125,32 @@ func (s *Server) StartTCP() {
 		if err != nil {
 			slog.Error("Error while start the tcp Server")
 		}
-
 		go s.handleTCPData(conn)
-
 	}
-
 }
 
 func (s *Server) StartElection() {
+
 	//transition to candidate
 	s.state = Candidate
 	s.currentTerm++
 
 	totalVotesRec := 1
 
+	//TODO implement election timeout b/w 150-300 ms
+
 	for _, v := range s.peers {
-		d, _ := json.Marshal(RequestVotePayload{
+
+		voteResp, err := s.RequestVote(&RequestVotePayload{
 			Term:         s.currentTerm,
 			CandidateId:  s.serverId,
 			LastLogIndex: s.prevLogIndex,
 			LastLogTerm:  s.prevLogTerm,
-		})
-		r, err := s.client.Post(fmt.Sprintf("%s/request-vote", v.HttpAddr), "application/json", bytes.NewBuffer(d))
-		if err != nil {
-			slog.Error("Retry the RPC")
-		}
-
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			slog.Error("Retry the RPC")
-		}
-
-		var voteResp RequestVoteResponse
-		err = json.Unmarshal(body, &voteResp)
+		}, v)
 
 		if err != nil {
-			slog.Error("Error while unmarshlling the resp")
+			slog.Error("Error while doing the RPC Request, should be retried", "err", err)
+			continue
 		}
 
 		if voteResp.VoteGranted {
@@ -175,14 +168,46 @@ func (s *Server) StartElection() {
 		slog.Info("Server is now leader")
 		s.state = Leader
 		//TODO start sending heartbeat
+		go s.SendHearbeat()
 	}
 }
 
-func (s *Server) SendHearbeat() {
+func (s *Server) RequestVote(p *RequestVotePayload, peer Peer) (*RequestVoteResponse, error) {
+	d, _ := json.Marshal(p)
+	r, err := s.client.Post(fmt.Sprintf("%s/request-vote", peer.HttpAddr), "application/json", bytes.NewBuffer(d))
+	if err != nil {
+		slog.Error("Error while making the post request", "err", err)
+		return nil, err
+	}
 
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		// slog.Error("Error while reading the request vote resp", "err", err)
+		return nil, err
+	}
+
+	var voteResp RequestVoteResponse
+	err = json.Unmarshal(body, &voteResp)
+
+	if err != nil {
+		// slog.Error("Error while unmarshlling the resp", "err", err)
+		return nil, err
+	}
+
+	return &voteResp, nil
+}
+
+// TODO Optimize send only if no log request was sent
+// TODO send commit index and other things as part of heartbeat
+func (s *Server) SendHearbeat() {
+	ticker := time.NewTicker(time.Millisecond * HEART_BEAT_INTERVAL_LEADER)
+	for range ticker.C {
+		s.ReplicateLog([]Value{})
+	}
 }
 
 func (s *Server) handleTCPData(conn net.Conn) {
+	defer conn.Close()
 	// reader := bufio.NewReader((conn))
 	for {
 		// message, err := reader.ReadString('\n')
@@ -194,14 +219,19 @@ func (s *Server) handleTCPData(conn net.Conn) {
 		// conn.Write([]byte("+OK\r\n"))
 
 		resp := NewResp(conn)
-		input, _ := resp.ProcessCMD()
-		fmt.Println(input)
+		input, err := resp.ProcessCMD()
+		// slog.Error(err)
+
+		if err != nil && err == io.EOF {
+			slog.Info("TCP connection was closed by the client")
+			break
+		}
 
 		command := input.Array[0].Bulk
 		handler, ok := Handlers[command]
 
 		if !ok {
-			fmt.Println("Invalid command: ", command)
+			slog.Error("Invalid command: ", "command", command)
 			v := Value{Typ: "string", Str: ""}
 			conn.Write(v.Marshal())
 			continue
@@ -209,18 +239,24 @@ func (s *Server) handleTCPData(conn net.Conn) {
 
 		if command == "SET" || command == "HSET" {
 
+			if s.state != Leader {
+				v := Value{Typ: "string", Str: "Leader not elected"}
+				conn.Write(v.Marshal())
+				continue
+			}
+
 			m, err := json.Marshal(Log{
 				Command: input,
 				Term:    s.currentTerm,
 			})
 
 			if err != nil {
-				slog.Error("error while parsing", "err", err)
+				slog.Error("error while parsing command", "err", err)
 			}
 
 			s.log.Write(uint64(s.prevLogIndex+1), m)
 
-			s.SendAppendEntryRPC([]Value{input})
+			s.ReplicateLog([]Value{input})
 
 			//apply the log to the SM
 			s.stateMachine[input.Array[1].Bulk] = input.Array[2].Bulk
@@ -234,38 +270,61 @@ func (s *Server) handleTCPData(conn net.Conn) {
 	}
 }
 
-func (s *Server) SendAppendEntryRPC(e []Value) {
+func (s *Server) ReplicateLog(e []Value) {
 
 	for _, v := range s.peers {
-		d, _ := json.Marshal(AppendEntryPayload{
+
+		s.AppendEntryRPC(&AppendEntryPayload{
 			Term:         s.currentTerm,
 			LeaderId:     s.serverId,
 			PrevLogIndex: s.prevLogIndex,
 			PrevLogTerm:  s.prevLogTerm,
 			Entries:      e,
 			LeaderCommit: s.commitIndex,
-		})
-
-		r, err := s.client.Post(fmt.Sprintf("%s/append-entry", v.HttpAddr), "application/json", bytes.NewBuffer(d))
-		if err != nil {
-			slog.Error("Retry the AppendEntry RPC")
-		}
-
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			slog.Error("Retry the AppendEntry RPC")
-		}
-
-		var voteResp RequestVoteResponse
-		err = json.Unmarshal(body, &voteResp)
-
-		if err != nil {
-			slog.Error("Error while unmarshlling the AppendEntry resp")
-		}
+		}, v)
 
 	}
 
-	s.prevLogIndex++
+	if len(e) > 0 {
+		s.prevLogIndex++
+	}
 	s.prevLogTerm = s.currentTerm
 
+}
+
+func (s *Server) AppendEntryRPC(p *AppendEntryPayload, peer Peer) (*AppendEntryResponse, error) {
+	d, _ := json.Marshal(p)
+
+	r, err := s.client.Post(fmt.Sprintf("%s/append-entry", peer.HttpAddr), "application/json", bytes.NewBuffer(d))
+	if err != nil {
+		slog.Error("Retry the AppendEntry RPC")
+		return nil, err
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		slog.Error("Retry the AppendEntry RPC")
+		return nil, err
+	}
+
+	var resp AppendEntryResponse
+	err = json.Unmarshal(body, &resp)
+
+	if err != nil {
+		slog.Error("Error while unmarshlling the AppendEntry resp")
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (s *Server) HeartbeatDetection(timeout int) {
+	ticker := time.NewTicker(time.Millisecond * time.Duration(timeout))
+
+	for range ticker.C {
+		//heartbeats not received from leader
+		if s.state == Follower && time.Now().UnixMilli()-s.lastHeartBeat > int64(timeout) {
+			slog.Info("Leader crashed detection, election will be started")
+			s.StartElection()
+		}
+	}
 }

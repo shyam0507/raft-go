@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 )
 
 type HttpServer struct {
@@ -19,7 +20,6 @@ func NewHTTPServer(s *Server) *HttpServer {
 
 func (h *HttpServer) startHTTPServer() {
 	http.HandleFunc("/request-vote", func(w http.ResponseWriter, r *http.Request) {
-		slog.Info("Received Request Vote Request")
 		var req RequestVotePayload
 		b, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -34,6 +34,10 @@ func (h *HttpServer) startHTTPServer() {
 			resp.VoteGranted = true
 			h.s.votedFor = req.CandidateId
 			h.s.currentTerm = req.Term
+
+			h.s.lastHeartBeat = time.Now().UnixMilli()
+
+			go h.s.HeartbeatDetection(ElectionTimeout())
 		} else {
 			resp.VoteGranted = false
 			resp.Term = h.s.currentTerm
@@ -49,7 +53,7 @@ func (h *HttpServer) startHTTPServer() {
 	})
 
 	http.HandleFunc("/append-entry", func(w http.ResponseWriter, r *http.Request) {
-		slog.Info("Received Append Entry Request")
+		// slog.Info("Received Append Entry Request")
 		var req AppendEntryPayload
 		b, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -57,35 +61,42 @@ func (h *HttpServer) startHTTPServer() {
 		}
 		json.Unmarshal(b, &req)
 
-		slog.Info("Received Append Entry Request Payload", "Payload", req)
+		valid, isHeartbeat := h.validateAppendRequest(req)
 
-		valid := h.validateAppendRequest(req)
+		slog.Info("Received Append Entry Request ", "Payload", req, "Valid", valid, "isHeartbeat", isHeartbeat)
 
-		slog.Info("Received Append Entry Request Is", "Valid", valid)
+		//update the last heartbeat timer
+		h.s.lastHeartBeat = time.Now().UnixMilli()
 
 		var resp AppendEntryResponse
 		if valid {
-			newLogIndex := req.PrevLogIndex + 1
-			l := Log{
-				Command: req.Entries[0],
-				Term:    req.Term,
+			if !isHeartbeat {
+				newLogIndex := req.PrevLogIndex + 1
+				l := Log{
+					Command: req.Entries[0],
+					Term:    req.Term,
+				}
+
+				d, _ := json.Marshal(l)
+
+				h.s.log.Write(uint64(newLogIndex), d)
+
 			}
 
-			d, _ := json.Marshal(l)
-
-			h.s.log.Write(uint64(newLogIndex), d)
-
-			//Fix this
+			//TODO Error handling
 			if req.LeaderCommit > h.s.commitIndex {
-				var l Log
-				data, _ := h.s.log.Read(uint64(req.LeaderCommit))
-				json.Unmarshal(data, &l)
+				for i := h.s.commitIndex + 1; i <= req.LeaderCommit; i++ {
+					var l Log
+					data, _ := h.s.log.Read(uint64(i))
+					json.Unmarshal(data, &l)
 
-				slog.Info("Received Data", "s", l)
+					//apply the log to the SM
+					h.s.stateMachine[l.Command.Array[1].Bulk] = l.Command.Array[2].Bulk
+					slog.Info("State Machine", "state", h.s.stateMachine)
 
-				//apply the log to the SM
-				h.s.stateMachine[l.Command.Array[1].Bulk] = l.Command.Array[2].Bulk
-				slog.Info("SM", "state", h.s.stateMachine)
+				}
+
+				h.s.commitIndex += (req.LeaderCommit - h.s.commitIndex)
 			}
 
 			resp.Success = true
@@ -107,40 +118,45 @@ func (h *HttpServer) startHTTPServer() {
 
 }
 
-// TBD Complete It
-func (h *HttpServer) validateAppendRequest(req AppendEntryPayload) bool {
+// TODO Complete It
+func (h *HttpServer) validateAppendRequest(req AppendEntryPayload) (valid bool, isHeartbeat bool) {
 
-	if h.s.currentTerm > req.Term {
-		return false
+	if req.Term < h.s.currentTerm {
+		return false, isHeartbeat
 	}
 
-	//checking if this is start server index will be 0
+	//checking if server log is empty but leader has some data
 	firstIndex, _ := h.s.log.FirstIndex()
 	if firstIndex == 0 && req.PrevLogIndex > 0 {
-		return false
+		return false, isHeartbeat
 	}
 
+	//this server has log stored
 	var prevLog Log
 	if firstIndex > 0 {
 		b, err := h.s.log.Read(uint64(req.PrevLogIndex))
 
 		if err != nil {
 			slog.Error("Could not find same log at previous index")
-			return false
+			return false, isHeartbeat
 		}
 
 		json.Unmarshal(b, &prevLog)
+
+		if prevLog.Term != req.PrevLogTerm {
+			return false, isHeartbeat
+		}
+
+		lastI, _ := h.s.log.LastIndex()
+
+		if lastI != uint64(req.PrevLogIndex) {
+			//we need to clean the data after PrevLogIndex at the server as it has invalid data
+		}
 	}
 
-	if prevLog.Term != req.PrevLogTerm {
-		return false
+	if len(req.Entries) == 0 {
+		isHeartbeat = true
 	}
 
-	lastI, _ := h.s.log.LastIndex()
-
-	if lastI != uint64(req.PrevLogIndex) {
-		//we need to clean the data
-	}
-
-	return true
+	return true, isHeartbeat
 }
