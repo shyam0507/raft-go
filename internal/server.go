@@ -47,7 +47,7 @@ type Server struct {
 	state  string
 
 	//
-	prevLogIndex int
+	prevLogIndex uint64
 	prevLogTerm  int
 
 	lastHeartBeat int64
@@ -61,7 +61,7 @@ type Log struct {
 type RequestVotePayload struct {
 	Term         int    `json:"term"`
 	CandidateId  string `json:"candidateId"`
-	LastLogIndex int    `json:"lastLogIndex"`
+	LastLogIndex uint64 `json:"lastLogIndex"`
 	LastLogTerm  int    `json:"lastLogTerm"`
 }
 
@@ -73,7 +73,7 @@ type RequestVoteResponse struct {
 type AppendEntryPayload struct {
 	Term         int     `json:"term"`
 	LeaderId     string  `json:"leaderId"`
-	PrevLogIndex int     `json:"prevLogIndex"`
+	PrevLogIndex uint64  `json:"prevLogIndex"`
 	PrevLogTerm  int     `json:"prevLogTerm"`
 	Entries      []Value `json:"entries"`
 	LeaderCommit int     `json:"leaderCommit"`
@@ -140,6 +140,16 @@ func (s *Server) StartElection() {
 	//TODO implement election timeout b/w 150-300 ms
 
 	for _, v := range s.peers {
+
+		s.prevLogIndex, _ = s.log.LastIndex()
+		if s.prevLogIndex > 0 {
+			d, _ := s.log.Read(s.prevLogIndex)
+			var l Log
+			json.Unmarshal(d, &l)
+			s.prevLogTerm = l.Term
+		} else {
+			s.prevLogTerm = 0
+		}
 
 		voteResp, err := s.RequestVote(&RequestVotePayload{
 			Term:         s.currentTerm,
@@ -287,8 +297,8 @@ func (s *Server) ReplicateLog(e []Value) {
 
 	if len(e) > 0 {
 		s.prevLogIndex++
+		s.prevLogTerm = s.currentTerm
 	}
-	s.prevLogTerm = s.currentTerm
 
 }
 

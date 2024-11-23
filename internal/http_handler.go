@@ -27,7 +27,7 @@ func (h *HttpServer) startHTTPServer() {
 		}
 		json.Unmarshal(b, &req)
 
-		slog.Info("Received Request Payload", "Payload", req)
+		slog.Info("Received Request Vote Payload", "Payload", req)
 
 		var resp RequestVoteResponse
 		if req.Term > h.s.currentTerm && req.LastLogIndex >= h.s.prevLogIndex {
@@ -47,6 +47,8 @@ func (h *HttpServer) startHTTPServer() {
 		if err != nil {
 			slog.Error("Error while parsing the request vote response")
 		}
+
+		slog.Info("Request Vote", "Req", req, "Response", resp)
 
 		w.Write(d)
 
