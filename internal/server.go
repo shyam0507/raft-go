@@ -33,8 +33,14 @@ type Server struct {
 	lastApplied int
 
 	//set for leader only
-	nextIndex  []int
-	matchIndex []int
+	nextIndex []struct {
+		index    int
+		serverId string
+	}
+	matchIndex []struct {
+		index    int
+		serverId string
+	}
 
 	stateMachine map[string]string
 
@@ -50,11 +56,12 @@ type Server struct {
 	prevLogIndex uint64
 	prevLogTerm  int
 
-	lastHeartBeat int64
+	lastHeartBeat  int64
+	requestChannel chan KVCmd
 }
 
 type Log struct {
-	Command Value
+	Command KVCmd
 	Term    int
 }
 
@@ -75,7 +82,7 @@ type AppendEntryPayload struct {
 	LeaderId     string  `json:"leaderId"`
 	PrevLogIndex uint64  `json:"prevLogIndex"`
 	PrevLogTerm  int     `json:"prevLogTerm"`
-	Entries      []Value `json:"entries"`
+	Entries      []KVCmd `json:"entries"`
 	LeaderCommit int     `json:"leaderCommit"`
 }
 
@@ -93,20 +100,21 @@ func NewServer(tPort string, hPort string, serverId string, peers []Peer) (*Serv
 	}
 
 	s := &Server{
-		currentTerm:  0,
-		votedFor:     "",
-		log:          log,
-		commitIndex:  0,
-		lastApplied:  0,
-		stateMachine: map[string]string{},
-		tcpPort:      tPort,
-		httpPort:     hPort,
-		serverId:     serverId,
-		client:       *http.DefaultClient,
-		peers:        peers,
-		prevLogIndex: 0,
-		prevLogTerm:  0,
-		state:        Follower,
+		currentTerm:    0,
+		votedFor:       "",
+		log:            log,
+		commitIndex:    0,
+		lastApplied:    0,
+		stateMachine:   map[string]string{},
+		tcpPort:        tPort,
+		httpPort:       hPort,
+		serverId:       serverId,
+		client:         *http.DefaultClient,
+		peers:          peers,
+		prevLogIndex:   0,
+		prevLogTerm:    0,
+		state:          Follower,
+		requestChannel: make(chan KVCmd, 100),
 	}
 
 	return s, nil
@@ -177,6 +185,9 @@ func (s *Server) StartElection() {
 	if totalVotesRec >= (len(s.peers)+2)/2 {
 		slog.Info("Server is now leader")
 		s.state = Leader
+
+		//set the next index and match index
+
 		//TODO start sending heartbeat
 		go s.SendHearbeat()
 	}
@@ -212,7 +223,7 @@ func (s *Server) RequestVote(p *RequestVotePayload, peer Peer) (*RequestVoteResp
 func (s *Server) SendHearbeat() {
 	ticker := time.NewTicker(time.Millisecond * HEART_BEAT_INTERVAL_LEADER)
 	for range ticker.C {
-		s.ReplicateLog([]Value{})
+		s.ReplicateLog([]KVCmd{})
 	}
 }
 
@@ -242,7 +253,7 @@ func (s *Server) handleTCPData(conn net.Conn) {
 
 		if !ok {
 			slog.Error("Invalid command: ", "command", command)
-			v := Value{Typ: "string", Str: ""}
+			v := KVCmd{Typ: "string", Str: ""}
 			conn.Write(v.Marshal())
 			continue
 		}
@@ -250,7 +261,7 @@ func (s *Server) handleTCPData(conn net.Conn) {
 		if command == "SET" || command == "HSET" {
 
 			if s.state != Leader {
-				v := Value{Typ: "string", Str: "Leader not elected"}
+				v := KVCmd{Typ: "string", Str: "Leader not elected"}
 				conn.Write(v.Marshal())
 				continue
 			}
@@ -266,7 +277,7 @@ func (s *Server) handleTCPData(conn net.Conn) {
 
 			s.log.Write(uint64(s.prevLogIndex+1), m)
 
-			s.ReplicateLog([]Value{input})
+			s.ReplicateLog([]KVCmd{input})
 
 			//apply the log to the SM
 			s.stateMachine[input.Array[1].Bulk] = input.Array[2].Bulk
@@ -280,7 +291,7 @@ func (s *Server) handleTCPData(conn net.Conn) {
 	}
 }
 
-func (s *Server) ReplicateLog(e []Value) {
+func (s *Server) ReplicateLog(e []KVCmd) {
 
 	for _, v := range s.peers {
 

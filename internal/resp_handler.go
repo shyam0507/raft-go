@@ -1,6 +1,6 @@
 package internal
 
-var Handlers = map[string]func([]Value, *map[string]string) Value{
+var Handlers = map[string]func([]KVCmd, *map[string]string) KVCmd{
 	"SET": set,
 	"GET": get,
 	// "HSET": hset,
@@ -8,28 +8,28 @@ var Handlers = map[string]func([]Value, *map[string]string) Value{
 	// "HGETALL": hgetall,
 }
 
-func ping(args []Value) Value {
+func ping(args []KVCmd) KVCmd {
 	if len(args) == 0 {
-		return Value{Typ: "string", Str: "PONG"}
+		return KVCmd{Typ: "string", Str: "PONG"}
 	}
 
-	return Value{Typ: "string", Str: args[0].Bulk}
+	return KVCmd{Typ: "string", Str: args[0].Bulk}
 }
 
-func set(args []Value, m *map[string]string) Value {
+func set(args []KVCmd, m *map[string]string) KVCmd {
 	if len(args) != 2 {
-		return Value{Typ: "error", Str: "ERR wrong number of arguments for 'set' command"}
+		return KVCmd{Typ: "error", Str: "ERR wrong number of arguments for 'set' command"}
 	}
 
 	// key := args[0].Bulk
 	// value := args[1].Bulk
 
-	return Value{Typ: "string", Str: "OK"}
+	return KVCmd{Typ: "string", Str: "OK"}
 }
 
-func get(args []Value, m *map[string]string) Value {
+func get(args []KVCmd, m *map[string]string) KVCmd {
 	if len(args) != 1 {
-		return Value{Typ: "error", Str: "ERR wrong number of arguments for 'set' command"}
+		return KVCmd{Typ: "error", Str: "ERR wrong number of arguments for 'set' command"}
 	}
 
 	key := args[0].Bulk
@@ -37,10 +37,10 @@ func get(args []Value, m *map[string]string) Value {
 	val, ok := m1[key]
 
 	if !ok {
-		return Value{Typ: "null"}
+		return KVCmd{Typ: "null"}
 	}
 
-	return Value{Typ: "bulk", Bulk: val}
+	return KVCmd{Typ: "bulk", Bulk: val}
 
 }
 

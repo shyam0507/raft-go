@@ -17,12 +17,12 @@ const (
 )
 
 // Struct the capture the input received
-type Value struct {
+type KVCmd struct {
 	Typ   string  // hold the type of data
 	Str   string  // hold string value
 	Num   int     // hold number value
 	Bulk  string  // if type is bulk hold the bulk string
-	Array []Value // if type is array hold the array
+	Array []KVCmd // if type is array hold the array
 }
 type Resp struct {
 	reader *bufio.Reader
@@ -33,10 +33,10 @@ func NewResp(reader io.Reader) *Resp {
 }
 
 // interpret Command
-func (r *Resp) ProcessCMD() (Value, error) {
+func (r *Resp) ProcessCMD() (KVCmd, error) {
 	op, err := r.reader.ReadByte()
 	if err != nil {
-		return Value{}, err
+		return KVCmd{}, err
 	}
 
 	switch op {
@@ -48,19 +48,19 @@ func (r *Resp) ProcessCMD() (Value, error) {
 		return r.readBulk()
 	default:
 		slog.Info("None")
-		return Value{}, fmt.Errorf("invalid command")
+		return KVCmd{}, fmt.Errorf("invalid command")
 	}
 }
 
 // *2\r\n$3\r\nGETr\n$5r\nShyam
 // 2\r\n$3\r\nGETr\n$5r\nShyam
 // $3\r\nGET\r\n$5\r\nShyam
-func (r *Resp) readArray() (Value, error) {
-	v := Value{}
+func (r *Resp) readArray() (KVCmd, error) {
+	v := KVCmd{}
 	v.Typ = "array"
 	num, _ := r.readInt()
 
-	v.Array = make([]Value, 0)
+	v.Array = make([]KVCmd, 0)
 	for i := 0; i < num; i++ {
 		val, _ := r.ProcessCMD()
 		v.Array = append(v.Array, val)
@@ -74,8 +74,8 @@ func (r *Resp) readArray() (Value, error) {
 // *6\r\n$5\r\nHMSET\r\n$5\r\nuser1\r\n$4\r\nname\r\n$5\r\nshyam\r\n$3\r\nage\r\n$2\r\n10
 
 // function to read a bulk string
-func (r *Resp) readBulk() (Value, error) {
-	v := Value{}
+func (r *Resp) readBulk() (KVCmd, error) {
+	v := KVCmd{}
 	v.Typ = "bulk"
 
 	num, _ := r.readInt()
@@ -117,7 +117,7 @@ func (r *Resp) readLine() (line []byte, err error) {
 	return line[:len(line)-2], nil
 }
 
-func (v Value) Marshal() []byte {
+func (v KVCmd) Marshal() []byte {
 	switch v.Typ {
 	case "array":
 		return v.marshalArray()
@@ -135,7 +135,7 @@ func (v Value) Marshal() []byte {
 }
 
 // This converts back to RESP, used for aof storage
-func (v Value) marshalString() []byte {
+func (v KVCmd) marshalString() []byte {
 	var bytes []byte
 	bytes = append(bytes, STRING)
 	bytes = append(bytes, v.Str...)
@@ -143,7 +143,7 @@ func (v Value) marshalString() []byte {
 	return bytes
 }
 
-func (v Value) marshalBulk() []byte {
+func (v KVCmd) marshalBulk() []byte {
 	var bytes []byte
 	bytes = append(bytes, BULK)
 	bytes = append(bytes, strconv.Itoa(len(v.Bulk))...)
@@ -153,7 +153,7 @@ func (v Value) marshalBulk() []byte {
 	return bytes
 }
 
-func (v Value) marshalArray() []byte {
+func (v KVCmd) marshalArray() []byte {
 	len := len(v.Array)
 	var bytes []byte
 	bytes = append(bytes, ARRAY)
@@ -167,7 +167,7 @@ func (v Value) marshalArray() []byte {
 	return bytes
 }
 
-func (v Value) marshallError() []byte {
+func (v KVCmd) marshallError() []byte {
 	var bytes []byte
 	bytes = append(bytes, ERROR)
 	bytes = append(bytes, v.Str...)
@@ -176,7 +176,7 @@ func (v Value) marshallError() []byte {
 	return bytes
 }
 
-func (v Value) marshallNull() []byte {
+func (v KVCmd) marshallNull() []byte {
 	return []byte("$-1\r\n")
 }
 
@@ -188,7 +188,7 @@ func NewWriter(w io.Writer) *Writer {
 	return &Writer{writer: w}
 }
 
-func (w *Writer) Write(v Value) error {
+func (w *Writer) Write(v KVCmd) error {
 	var bytes = v.Marshal()
 	_, err := w.writer.Write(bytes)
 	if err != nil {
