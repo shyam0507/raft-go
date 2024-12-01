@@ -24,7 +24,7 @@ type Peer struct {
 	TcpAddr  string
 }
 
-type Server struct {
+type server struct {
 	currentTerm int
 	votedFor    string
 	log         *wal.Log
@@ -57,7 +57,12 @@ type Server struct {
 	prevLogTerm  int
 
 	lastHeartBeat  int64
-	requestChannel chan KVCmd
+	requestChannel chan RequestResponse
+}
+
+type RequestResponse struct {
+	cmd     KVCmd
+	resChan chan bool
 }
 
 type Log struct {
@@ -91,7 +96,7 @@ type AppendEntryResponse struct {
 	Success bool `json:"success"`
 }
 
-func NewServer(tPort string, hPort string, serverId string, peers []Peer) (*Server, error) {
+func NewServer(tPort string, hPort string, serverId string, peers []Peer) (*server, error) {
 	currT := time.Now().Nanosecond()
 	log, err := wal.Open(fmt.Sprintf("log/mylog_%s_%d", serverId, currT), nil)
 
@@ -99,7 +104,7 @@ func NewServer(tPort string, hPort string, serverId string, peers []Peer) (*Serv
 		slog.Error("Error while creating wal")
 	}
 
-	s := &Server{
+	s := &server{
 		currentTerm:    0,
 		votedFor:       "",
 		log:            log,
@@ -114,13 +119,18 @@ func NewServer(tPort string, hPort string, serverId string, peers []Peer) (*Serv
 		prevLogIndex:   0,
 		prevLogTerm:    0,
 		state:          Follower,
-		requestChannel: make(chan KVCmd, 100),
+		requestChannel: make(chan RequestResponse, 100),
 	}
 
 	return s, nil
 }
 
-func (s *Server) StartTCP() {
+func (s *server) Start() {
+	go s.startSingularUpdateQueue()
+	s.startTCP()
+}
+
+func (s *server) startTCP() {
 	l, err := net.Listen("tcp", ":"+s.tcpPort)
 
 	if err != nil {
@@ -137,7 +147,25 @@ func (s *Server) StartTCP() {
 	}
 }
 
-func (s *Server) StartElection() {
+// SingularUpdateQueue starts a goroutine to update the key-value store
+// in sequence. As of now it is a no-op.
+func (s *server) startSingularUpdateQueue() {
+	for req := range s.requestChannel {
+		slog.Info("SingularUpdateQueue: received data", "cmd", req.cmd)
+		//replicate the command to peers
+		s.replicateLog([]KVCmd{req.cmd})
+
+		//apply the log to the SM
+		s.stateMachine[req.cmd.Array[1].Bulk] = req.cmd.Array[2].Bulk
+		slog.Info("SM", "state", s.stateMachine)
+
+		s.commitIndex++
+
+		req.resChan <- true
+	}
+}
+
+func (s *server) StartElection() {
 
 	//transition to candidate
 	s.state = Candidate
@@ -159,7 +187,7 @@ func (s *Server) StartElection() {
 			s.prevLogTerm = 0
 		}
 
-		voteResp, err := s.RequestVote(&RequestVotePayload{
+		voteResp, err := s.requestVote(&RequestVotePayload{
 			Term:         s.currentTerm,
 			CandidateId:  s.serverId,
 			LastLogIndex: s.prevLogIndex,
@@ -189,11 +217,11 @@ func (s *Server) StartElection() {
 		//set the next index and match index
 
 		//TODO start sending heartbeat
-		go s.SendHearbeat()
+		go s.sendHearbeat()
 	}
 }
 
-func (s *Server) RequestVote(p *RequestVotePayload, peer Peer) (*RequestVoteResponse, error) {
+func (s *server) requestVote(p *RequestVotePayload, peer Peer) (*RequestVoteResponse, error) {
 	d, _ := json.Marshal(p)
 	r, err := s.client.Post(fmt.Sprintf("%s/request-vote", peer.HttpAddr), "application/json", bytes.NewBuffer(d))
 	if err != nil {
@@ -220,14 +248,14 @@ func (s *Server) RequestVote(p *RequestVotePayload, peer Peer) (*RequestVoteResp
 
 // TODO Optimize send only if no log request was sent
 // TODO send commit index and other things as part of heartbeat
-func (s *Server) SendHearbeat() {
+func (s *server) sendHearbeat() {
 	ticker := time.NewTicker(time.Millisecond * HEART_BEAT_INTERVAL_LEADER)
 	for range ticker.C {
-		s.ReplicateLog([]KVCmd{})
+		s.replicateLog([]KVCmd{})
 	}
 }
 
-func (s *Server) handleTCPData(conn net.Conn) {
+func (s *server) handleTCPData(conn net.Conn) {
 	defer conn.Close()
 	// reader := bufio.NewReader((conn))
 	for {
@@ -275,27 +303,33 @@ func (s *Server) handleTCPData(conn net.Conn) {
 				slog.Error("error while parsing command", "err", err)
 			}
 
+			//TODO migrate this
 			s.log.Write(uint64(s.prevLogIndex+1), m)
 
-			s.ReplicateLog([]KVCmd{input})
+			resChan := make(chan bool, 1)
+			s.requestChannel <- RequestResponse{
+				cmd:     input,
+				resChan: resChan,
+			}
 
-			//apply the log to the SM
-			s.stateMachine[input.Array[1].Bulk] = input.Array[2].Bulk
-			slog.Info("SM", "state", s.stateMachine)
-
-			s.commitIndex++
+			slog.Info("Added data to request channel")
+			<-resChan
+			v := KVCmd{Typ: "string", Str: "Ok"}
+			conn.Write(v.Marshal())
+		} else {
+			result := handler(input.Array[1:], &s.stateMachine)
+			conn.Write(result.Marshal())
 		}
 
-		result := handler(input.Array[1:], &s.stateMachine)
-		conn.Write(result.Marshal())
 	}
+
 }
 
-func (s *Server) ReplicateLog(e []KVCmd) {
+func (s *server) replicateLog(e []KVCmd) {
 
 	for _, v := range s.peers {
 
-		s.AppendEntryRPC(&AppendEntryPayload{
+		s.appendEntryRPC(&AppendEntryPayload{
 			Term:         s.currentTerm,
 			LeaderId:     s.serverId,
 			PrevLogIndex: s.prevLogIndex,
@@ -313,7 +347,7 @@ func (s *Server) ReplicateLog(e []KVCmd) {
 
 }
 
-func (s *Server) AppendEntryRPC(p *AppendEntryPayload, peer Peer) (*AppendEntryResponse, error) {
+func (s *server) appendEntryRPC(p *AppendEntryPayload, peer Peer) (*AppendEntryResponse, error) {
 	d, _ := json.Marshal(p)
 
 	r, err := s.client.Post(fmt.Sprintf("%s/append-entry", peer.HttpAddr), "application/json", bytes.NewBuffer(d))
@@ -338,7 +372,7 @@ func (s *Server) AppendEntryRPC(p *AppendEntryPayload, peer Peer) (*AppendEntryR
 	return &resp, nil
 }
 
-func (s *Server) HeartbeatDetection(timeout int) {
+func (s *server) heartbeatDetection(timeout int) {
 	ticker := time.NewTicker(time.Millisecond * time.Duration(timeout))
 
 	for range ticker.C {

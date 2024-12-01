@@ -48,6 +48,7 @@ func main() {
 	}
 
 	s, _ := server.NewServer(tcpPort, httpPort, serverId, peers)
+
 	internal.NewHTTPServer(s)
 
 	slog.Info("HTTP server running")
@@ -56,6 +57,6 @@ func main() {
 		s.StartElection()
 	}
 
-	s.StartTCP()
+	s.Start()
 
 }

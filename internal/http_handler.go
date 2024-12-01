@@ -9,10 +9,10 @@ import (
 )
 
 type HttpServer struct {
-	s *Server
+	s *server
 }
 
-func NewHTTPServer(s *Server) *HttpServer {
+func NewHTTPServer(s *server) *HttpServer {
 	h := HttpServer{s: s}
 	go h.startHTTPServer()
 	return &h
@@ -37,7 +37,7 @@ func (h *HttpServer) startHTTPServer() {
 
 			h.s.lastHeartBeat = time.Now().UnixMilli()
 
-			go h.s.HeartbeatDetection(ElectionTimeout())
+			go h.s.heartbeatDetection(ElectionTimeout())
 		} else {
 			resp.VoteGranted = false
 			resp.Term = h.s.currentTerm
