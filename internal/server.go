@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/tidwall/wal"
@@ -43,6 +45,7 @@ type server struct {
 	}
 
 	stateMachine map[string]string
+	mu           sync.RWMutex
 
 	tcpPort  string
 	httpPort string
@@ -111,6 +114,7 @@ func NewServer(tPort string, hPort string, serverId string, peers []Peer) (*serv
 		commitIndex:    0,
 		lastApplied:    0,
 		stateMachine:   map[string]string{},
+		mu:             sync.RWMutex{},
 		tcpPort:        tPort,
 		httpPort:       hPort,
 		serverId:       serverId,
@@ -156,7 +160,9 @@ func (s *server) startSingularUpdateQueue() {
 		s.replicateLog([]KVCmd{req.cmd})
 
 		//apply the log to the SM
+		s.mu.Lock()
 		s.stateMachine[req.cmd.Array[1].Bulk] = req.cmd.Array[2].Bulk
+		s.mu.Unlock()
 		slog.Info("SM", "state", s.stateMachine)
 
 		s.commitIndex++
@@ -276,7 +282,8 @@ func (s *server) handleTCPData(conn net.Conn) {
 			break
 		}
 
-		command := input.Array[0].Bulk
+		// command := input.Array[0].Bulk
+		command := strings.ToUpper(input.Array[0].Bulk)
 		handler, ok := Handlers[command]
 
 		if !ok {
@@ -317,7 +324,9 @@ func (s *server) handleTCPData(conn net.Conn) {
 			v := KVCmd{Typ: "string", Str: "Ok"}
 			conn.Write(v.Marshal())
 		} else {
+			s.mu.RLock()
 			result := handler(input.Array[1:], &s.stateMachine)
+			s.mu.RUnlock()
 			conn.Write(result.Marshal())
 		}
 
