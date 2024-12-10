@@ -95,8 +95,8 @@ func (h *HttpServer) startHTTPServer() {
 					//apply the log to the SM
 					h.s.mu.Lock()
 					h.s.stateMachine[l.Command.Array[1].Bulk] = l.Command.Array[2].Bulk
-					h.s.mu.Unlock()
 					slog.Info("State Machine", "state", h.s.stateMachine)
+					h.s.mu.Unlock()
 
 				}
 
