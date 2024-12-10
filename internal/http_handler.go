@@ -99,8 +99,9 @@ func (h *HttpServer) startHTTPServer() {
 					slog.Info("State Machine", "state", h.s.stateMachine)
 
 				}
-				h.s.mu.Unlock()
 				h.s.commitIndex += (req.LeaderCommit - h.s.commitIndex)
+				h.s.mu.Unlock()
+
 			}
 
 			resp.Success = true
