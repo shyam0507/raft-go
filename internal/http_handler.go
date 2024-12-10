@@ -87,20 +87,21 @@ func (h *HttpServer) startHTTPServer() {
 
 			//TODO Error handling
 			if req.LeaderCommit > h.s.commitIndex {
+				h.s.mu.Lock()
 				for i := h.s.commitIndex + 1; i <= req.LeaderCommit; i++ {
 					var l Log
 					data, _ := h.s.log.Read(uint64(i))
 					json.Unmarshal(data, &l)
 
 					//apply the log to the SM
-					h.s.mu.Lock()
+
 					h.s.stateMachine[l.Command.Array[1].Bulk] = l.Command.Array[2].Bulk
-					h.s.mu.Unlock()
 					slog.Info("State Machine", "state", h.s.stateMachine)
 
 				}
-
 				h.s.commitIndex += (req.LeaderCommit - h.s.commitIndex)
+				h.s.mu.Unlock()
+
 			}
 
 			resp.Success = true

@@ -157,13 +157,14 @@ func (s *server) startSingularUpdateQueue() {
 	for req := range s.requestChannel {
 		slog.Info("SingularUpdateQueue: received data", "cmd", req.cmd)
 		//replicate the command to peers
+		//TODO Commented for testing
 		s.replicateLog([]KVCmd{req.cmd})
 
 		//apply the log to the SM
 		s.mu.Lock()
 		s.stateMachine[req.cmd.Array[1].Bulk] = req.cmd.Array[2].Bulk
-		s.mu.Unlock()
 		slog.Info("SM", "state", s.stateMachine)
+		s.mu.Unlock()
 
 		s.commitIndex++
 
@@ -301,6 +302,8 @@ func (s *server) handleTCPData(conn net.Conn) {
 				continue
 			}
 
+			//TODO Commented for testing
+
 			m, err := json.Marshal(Log{
 				Command: input,
 				Term:    s.currentTerm,
@@ -338,6 +341,7 @@ func (s *server) replicateLog(e []KVCmd) {
 
 	for _, v := range s.peers {
 
+		//TODO Implement properly
 		s.appendEntryRPC(&AppendEntryPayload{
 			Term:         s.currentTerm,
 			LeaderId:     s.serverId,
