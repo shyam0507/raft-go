@@ -11,7 +11,6 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/shyam0507/raft-go/internal"
-	server "github.com/shyam0507/raft-go/internal"
 )
 
 func main() {
@@ -40,14 +39,14 @@ func main() {
 		startElection = v
 	}
 
-	var peers []server.Peer
+	var peers []internal.PeerInfo
 	for _, v := range peersHttp {
-		peers = append(peers, server.Peer{
+		peers = append(peers, internal.PeerInfo{
 			HttpAddr: v,
 		})
 	}
 
-	s, _ := server.NewServer(tcpPort, httpPort, serverId, peers)
+	s, _ := internal.NewServer(tcpPort, httpPort, serverId, peers)
 
 	internal.NewHTTPServer(s)
 

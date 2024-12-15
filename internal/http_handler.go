@@ -9,11 +9,12 @@ import (
 )
 
 type HttpServer struct {
-	s *server
+	s  *server
+	ch chan any
 }
 
 func NewHTTPServer(s *server) *HttpServer {
-	h := HttpServer{s: s}
+	h := HttpServer{s: s, ch: make(chan any, 100)}
 	go h.startHTTPServer()
 	return &h
 }
@@ -35,7 +36,7 @@ func (h *HttpServer) startHTTPServer() {
 			h.s.votedFor = req.CandidateId
 			h.s.currentTerm = req.Term
 
-			h.s.lastHeartBeat = time.Now().UnixMilli()
+			h.s.lastHeartBeat.Store(time.Now().UnixMilli())
 
 			go h.s.heartbeatDetection(ElectionTimeout())
 		} else {
@@ -54,6 +55,7 @@ func (h *HttpServer) startHTTPServer() {
 
 	})
 
+	//TODO Use channel here
 	http.HandleFunc("/append-entry", func(w http.ResponseWriter, r *http.Request) {
 		// slog.Info("Received Append Entry Request")
 		var req AppendEntryPayload
@@ -68,7 +70,8 @@ func (h *HttpServer) startHTTPServer() {
 		slog.Info("Received Append Entry Request ", "Payload", req, "Valid", valid, "isHeartbeat", isHeartbeat)
 
 		//update the last heartbeat timer
-		h.s.lastHeartBeat = time.Now().UnixMilli()
+		// h.s.lastHeartBeat = time.Now().UnixMilli()
+		h.s.lastHeartBeat.Store(time.Now().UnixMilli())
 
 		var resp AppendEntryResponse
 		if valid {
@@ -87,7 +90,7 @@ func (h *HttpServer) startHTTPServer() {
 
 			//TODO Error handling
 			if req.LeaderCommit > h.s.commitIndex {
-				h.s.mu.Lock()
+				// h.s.mu.Lock()
 				for i := h.s.commitIndex + 1; i <= req.LeaderCommit; i++ {
 					var l Log
 					data, _ := h.s.log.Read(uint64(i))
@@ -95,12 +98,12 @@ func (h *HttpServer) startHTTPServer() {
 
 					//apply the log to the SM
 
-					h.s.stateMachine[l.Command.Array[1].Bulk] = l.Command.Array[2].Bulk
-					slog.Info("State Machine", "state", h.s.stateMachine)
+					h.s.stateMachine.Store(l.Command.Array[1].Bulk, l.Command.Array[2].Bulk)
+					// slog.Info("State Machine", "state", h.s.stateMachine)
 
 				}
 				h.s.commitIndex += (req.LeaderCommit - h.s.commitIndex)
-				h.s.mu.Unlock()
+				// h.s.mu.Unlock()
 
 			}
 

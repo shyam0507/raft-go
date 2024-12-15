@@ -1,6 +1,8 @@
 package internal
 
-var Handlers = map[string]func([]KVCmd, *map[string]string) KVCmd{
+import "sync"
+
+var Handlers = map[string]func([]KVCmd, *sync.Map) KVCmd{
 	"SET": set,
 	"GET": get,
 	// "HSET": hset,
@@ -16,7 +18,7 @@ func ping(args []KVCmd) KVCmd {
 	return KVCmd{Typ: "string", Str: args[0].Bulk}
 }
 
-func set(args []KVCmd, m *map[string]string) KVCmd {
+func set(args []KVCmd, m *sync.Map) KVCmd {
 	if len(args) != 2 {
 		return KVCmd{Typ: "error", Str: "ERR wrong number of arguments for 'set' command"}
 	}
@@ -27,20 +29,20 @@ func set(args []KVCmd, m *map[string]string) KVCmd {
 	return KVCmd{Typ: "string", Str: "OK"}
 }
 
-func get(args []KVCmd, m *map[string]string) KVCmd {
+func get(args []KVCmd, m *sync.Map) KVCmd {
 	if len(args) != 1 {
 		return KVCmd{Typ: "error", Str: "ERR wrong number of arguments for 'set' command"}
 	}
 
 	key := args[0].Bulk
 	m1 := *m
-	val, ok := m1[key]
+	val, ok := m1.Load(key)
 
 	if !ok {
 		return KVCmd{Typ: "null"}
 	}
 
-	return KVCmd{Typ: "bulk", Bulk: val}
+	return KVCmd{Typ: "bulk", Bulk: val.(string)}
 
 }
 
